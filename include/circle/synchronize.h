@@ -2,7 +2,7 @@
 // synchronize.h
 //
 // Circle - A C++ bare metal environment for Raspberry Pi
-// Copyright (C) 2014-2017  R. Stange <rsta2@o2online.de>
+// Copyright (C) 2014-2020  R. Stange <rsta2@o2online.de>
 // 
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -20,6 +20,10 @@
 #ifndef _circle_synchronize_h
 #define _circle_synchronize_h
 
+#if AARCH == 64
+	#include <circle/synchronize64.h>
+#else
+
 #include <circle/macros.h>
 #include <circle/types.h>
 
@@ -33,6 +37,8 @@ extern "C" {
 #define TASK_LEVEL		0		// IRQs and FIQs enabled
 #define IRQ_LEVEL		1		// IRQs disabled, FIQs enabled
 #define FIQ_LEVEL		2		// IRQs and FIQs disabled
+
+unsigned CurrentExecutionLevel (void);
 
 //
 // Interrupt control
@@ -118,12 +124,21 @@ void SyncDataAndInstructionCache (void);
 #define PeripheralEntry()	((void) 0)	// ignored here
 #define PeripheralExit()	((void) 0)
 
+//
+// Wait for interrupt and event
+//
+#define WaitForInterrupt()	asm volatile ("wfi")
+#define WaitForEvent()		asm volatile ("wfe")
+#define SendEvent()		asm volatile ("sev")
+
 #endif
 
 #define CompilerBarrier()	asm volatile ("" ::: "memory")
 
 #ifdef __cplusplus
 }
+#endif
+
 #endif
 
 #endif

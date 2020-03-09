@@ -2,7 +2,7 @@
 // pwmsounddevice.cpp
 //
 // Circle - A C++ bare metal environment for Raspberry Pi
-// Copyright (C) 2014-2017  R. Stange <rsta2@o2online.de>
+// Copyright (C) 2014-2020  R. Stange <rsta2@o2online.de>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -20,16 +20,30 @@
 #include <circle/pwmsounddevice.h>
 #include <assert.h>
 
-// Playback works with 44100 Hz, Stereo, 12 Bit only.
+// Playback works with 44100 Hz, Stereo only.
 // Other sound formats will be converted on the fly.
 
 #define SAMPLE_RATE		44100
 
 CPWMSoundDevice::CPWMSoundDevice (CInterruptSystem *pInterrupt)
 :	CPWMSoundBaseDevice (pInterrupt, SAMPLE_RATE),
+	m_nRangeBits (0),
+	m_bChannelsSwapped (AreChannelsSwapped ()),
 	m_pSoundData (0)
 {
-	assert ((1 << 12) <= GetRange () && GetRange () < (1 << 13));	// 12 bit range
+	assert (GetRangeMin () == 0);
+
+	for (unsigned nBits = 2; nBits < 16; nBits++)
+	{
+		if (GetRangeMax () < (1 << nBits))
+		{
+			m_nRangeBits = nBits-1;
+
+			break;
+		}
+	}
+
+	assert (m_nRangeBits > 0);
 }
 
 CPWMSoundDevice::~CPWMSoundDevice (void)
@@ -88,37 +102,45 @@ unsigned CPWMSoundDevice::GetChunk (u32 *pBuffer, unsigned nChunkSize)
 			nValue = (nValue + 0x8000) & 0xFFFF;		// signed -> unsigned (16 bit)
 		}
 		
-		if (m_nBitsPerSample >= 12)
+		if (m_nBitsPerSample >= m_nRangeBits)
 		{
-			nValue >>= m_nBitsPerSample - 12;
+			nValue >>= m_nBitsPerSample - m_nRangeBits;
 		}
 		else
 		{
-			nValue <<= 12 - m_nBitsPerSample;
+			nValue <<= m_nRangeBits - m_nBitsPerSample;
 		}
 
-		pBuffer[nSample++] = nValue;
-
+		unsigned nValue2 = nValue;
 		if (m_nChannels == 2)
 		{
-			nValue = *m_pSoundData++;
+			nValue2 = *m_pSoundData++;
 			if (m_nBitsPerSample > 8)
 			{
-				nValue |= (unsigned) *m_pSoundData++ << 8;
-				nValue = (nValue + 0x8000) & 0xFFFF;	// signed -> unsigned (16 bit)
+				nValue2 |= (unsigned) *m_pSoundData++ << 8;
+				nValue2 = (nValue2 + 0x8000) & 0xFFFF;	// signed -> unsigned (16 bit)
 			}
 
-			if (m_nBitsPerSample >= 12)
+			if (m_nBitsPerSample >= m_nRangeBits)
 			{
-				nValue >>= m_nBitsPerSample - 12;
+				nValue2 >>= m_nBitsPerSample - m_nRangeBits;
 			}
 			else
 			{
-				nValue <<= 12 - m_nBitsPerSample;
+				nValue2 <<= m_nRangeBits - m_nBitsPerSample;
 			}
 		}
 
-		pBuffer[nSample++] = nValue;
+		if (!m_bChannelsSwapped)
+		{
+			pBuffer[nSample++] = nValue;
+			pBuffer[nSample++] = nValue2;
+		}
+		else
+		{
+			pBuffer[nSample++] = nValue2;
+			pBuffer[nSample++] = nValue;
+		}
 
 		nResult += 2;
 

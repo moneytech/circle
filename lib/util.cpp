@@ -2,7 +2,7 @@
 // util.cpp
 //
 // Circle - A C++ bare metal environment for Raspberry Pi
-// Copyright (C) 2014-2016  R. Stange <rsta2@o2online.de>
+// Copyright (C) 2014-2019  R. Stange <rsta2@o2online.de>
 // 
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -21,7 +21,27 @@
 
 void *memset (void *pBuffer, int nValue, size_t nLength)
 {
-	char *p = (char *) pBuffer;
+	u32 *p32 = (u32 *) pBuffer;
+
+	if (   ((uintptr) p32 & 3) == 0
+	    && nLength >= 16)
+	{
+		u32 nValue32 = nValue | nValue << 8;
+		nValue32 |= nValue32 << 16;
+
+		do
+		{
+			*p32++ = nValue32;
+			*p32++ = nValue32;
+			*p32++ = nValue32;
+			*p32++ = nValue32;
+
+			nLength -= 16;
+		}
+		while (nLength >= 16);
+	}
+
+	char *p = (char *) p32;
 
 	while (nLength--)
 	{
@@ -29,6 +49,30 @@ void *memset (void *pBuffer, int nValue, size_t nLength)
 	}
 
 	return pBuffer;
+}
+
+#if STDLIB_SUPPORT <= 1
+
+void *memmove (void *pDest, const void *pSrc, size_t nLength)
+{
+	char *pchDest = (char *) pDest;
+	const char *pchSrc = (const char *) pSrc;
+
+	if (   pchSrc < pchDest
+	    && pchDest < pchSrc + nLength)
+	{
+		pchSrc += nLength;
+		pchDest += nLength;
+
+		while (nLength--)
+		{
+			*--pchDest = *--pchSrc;
+		}
+
+		return pDest;
+	}
+
+	return memcpy (pDest, pSrc, nLength);
 }
 
 int memcmp (const void *pBuffer1, const void *pBuffer2, size_t nLength)
@@ -82,6 +126,87 @@ int strcmp (const char *pString1, const char *pString2)
 
 		pString1++;
 		pString2++;
+	}
+
+	if (*pString1 > *pString2)
+	{
+		return 1;
+	}
+	else if (*pString1 < *pString2)
+	{
+		return -1;
+	}
+
+	return 0;
+}
+
+static int toupper (int c)
+{
+	if ('a' <= c && c <= 'z')
+	{
+		c -= 'a' - 'A';
+	}
+
+	return c;
+}
+
+int strcasecmp (const char *pString1, const char *pString2)
+{
+	int nChar1, nChar2;
+
+	while (   (nChar1 = toupper (*pString1)) != '\0'
+	       && (nChar2 = toupper (*pString2)) != '\0')
+	{
+		if (nChar1 > nChar2)
+		{
+			return 1;
+		}
+		else if (nChar1 < nChar2)
+		{
+			return -1;
+		}
+
+		pString1++;
+		pString2++;
+	}
+
+	nChar2 = toupper (*pString2);
+
+	if (nChar1 > nChar2)
+	{
+		return 1;
+	}
+	else if (nChar1 < nChar2)
+	{
+		return -1;
+	}
+
+	return 0;
+}
+
+int strncmp (const char *pString1, const char *pString2, size_t nMaxLen)
+{
+	while (   nMaxLen > 0
+	       && *pString1 != '\0'
+	       && *pString2 != '\0')
+	{
+		if (*pString1 > *pString2)
+		{
+			return 1;
+		}
+		else if (*pString1 < *pString2)
+		{
+			return -1;
+		}
+
+		nMaxLen--;
+		pString1++;
+		pString2++;
+	}
+
+	if (nMaxLen == 0)
+	{
+		return 0;
 	}
 
 	if (*pString1 > *pString2)
@@ -159,6 +284,43 @@ char *strchr (const char *pString, int chChar)
 		if (*pString == chChar)
 		{
 			return (char *) pString;
+		}
+
+		pString++;
+	}
+
+	return 0;
+}
+
+char *strstr (const char *pString, const char *pNeedle)
+{
+	if (!*pString)
+	{
+		if (*pNeedle)
+		{
+			return 0;
+		}
+
+		return (char *) pString;
+	}
+
+	while (*pString)
+	{
+		size_t i = 0;
+
+		while (1)
+		{
+			if (!pNeedle[i])
+			{
+				return (char *) pString;
+			}
+
+			if (pNeedle[i] != pString[i])
+			{
+				break;
+			}
+
+			i++;
 		}
 
 		pString++;
@@ -349,6 +511,8 @@ unsigned long strtoul (const char *pString, char **ppEndPtr, int nBase)
 
 	return ulResult;
 }
+
+#endif
 
 int char2int (char chValue)
 {

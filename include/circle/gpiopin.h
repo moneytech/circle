@@ -2,7 +2,7 @@
 // gpiopin.h
 //
 // Circle - A C++ bare metal environment for Raspberry Pi
-// Copyright (C) 2014-2017  R. Stange <rsta2@o2online.de>
+// Copyright (C) 2014-2020  R. Stange <rsta2@o2online.de>
 // 
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -47,6 +47,14 @@ enum TGPIOMode
 	GPIOModeUnknown
 };
 
+enum TGPIOPullMode
+{
+	GPIOPullModeOff,
+	GPIOPullModeDown,
+	GPIOPullModeUp,
+	GPIOPullModeUnknown
+};
+
 enum TGPIOInterrupt
 {
 	GPIOInterruptOnRisingEdge,
@@ -65,16 +73,27 @@ class CGPIOManager;
 class CGPIOPin		/// Encapsulates a GPIO pin
 {
 public:
+	/// \brief Default constructor
+	CGPIOPin (void);
+
 	/// \param nPin Pin number, can be physical (Broadcom) number or TGPIOVirtualPin
+	/// \param Mode Pin mode to be set
 	/// \param pManager Is only required for using interrupts (IRQ)
 	CGPIOPin (unsigned nPin, TGPIOMode Mode, CGPIOManager *pManager = 0);
 	virtual ~CGPIOPin (void);
+
+	/// \param nPin Pin number, can be physical (Broadcom) number or TGPIOVirtualPin
+	/// \note To be used together with the default constructor and SetMode()
+	void AssignPin (unsigned nPin);
 
 	/// \param Mode Pin mode to be set
 	/// \param bInitPin Also init pullup/down mode and output level
 	void SetMode (TGPIOMode	Mode,
 		      boolean	bInitPin = TRUE);
 	
+	/// \param Mode Pull mode to be set
+	void SetPullMode (TGPIOPullMode Mode);
+
 	/// \param nValue Value to be written to the pin (LOW or HIGH)
 	void Write (unsigned nValue);
 	/// \return Value read from pin (LOW or HIGH)
@@ -87,7 +106,10 @@ public:
 
 	/// \param pHandler Interrupt handler to be called on GPIO event
 	/// \param pParam Any parameter, will be handed over to the interrupt handler
-	void ConnectInterrupt (TGPIOInterruptHandler *pHandler, void *pParam);
+	/// \param bAutoAck Automatically acknowledge GPIO event detect status?
+	/// \note If bAutoAck = FALSE, must call AcknowledgeInterrupt() from interrupt handler!
+	void ConnectInterrupt (TGPIOInterruptHandler *pHandler, void *pParam,
+			       boolean bAutoAck = TRUE);
 	void DisconnectInterrupt (void);
 
 	/// \brief Enable interrupt on GPIO event
@@ -98,12 +120,17 @@ public:
 	void EnableInterrupt2 (TGPIOInterrupt Interrupt);
 	void DisableInterrupt2 (void);
 
+	/// \brief Manually acknowledge GPIO event detect status from interrupt handler
+	void AcknowledgeInterrupt (void);
+
+	/// \param nValue Level of GPIO0-31 in the respective bits to be written (masked by nMask)
+	/// \param nMask  Bit mask for the written value (only those GPIOs are affected, for which
+	///		  the respective bit is set in nMask, the others are not touched)
+	static void WriteAll (u32 nValue, u32 nMask);
 	/// \return Level of GPIO0-31 in the respective bits
 	static u32 ReadAll (void);
 
 private:
-	void SetPullUpMode (unsigned nMode);
-
 	void SetAlternateFunction (unsigned nFunction);
 
 	void InterruptHandler (void);
@@ -120,6 +147,7 @@ protected:
 	CGPIOManager		*m_pManager;
 	TGPIOInterruptHandler	*m_pHandler;
 	void			*m_pParam;
+	boolean			 m_bAutoAck;
 	TGPIOInterrupt		 m_Interrupt;
 	TGPIOInterrupt		 m_Interrupt2;
 

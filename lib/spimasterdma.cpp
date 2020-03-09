@@ -2,7 +2,7 @@
 // spimasterdma.cpp
 //
 // Circle - A C++ bare metal environment for Raspberry Pi
-// Copyright (C) 2016  R. Stange <rsta2@o2online.de>
+// Copyright (C) 2016-2019  R. Stange <rsta2@o2online.de>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -51,12 +51,13 @@
 #define CS_CS__SHIFT	0
 
 CSPIMasterDMA::CSPIMasterDMA (CInterruptSystem *pInterruptSystem,
-			      unsigned nClockSpeed, unsigned CPOL, unsigned CPHA)
+			      unsigned nClockSpeed, unsigned CPOL, unsigned CPHA,
+			      boolean bDMAChannelLite)
 :	m_nClockSpeed (nClockSpeed),
 	m_CPOL (CPOL),
 	m_CPHA (CPHA),
-	m_TxDMA (DMA_CHANNEL_SPI_TX, pInterruptSystem),
-	m_RxDMA (DMA_CHANNEL_SPI_RX, pInterruptSystem),
+	m_TxDMA (bDMAChannelLite ? DMA_CHANNEL_LITE : DMA_CHANNEL_NORMAL, pInterruptSystem),
+	m_RxDMA (bDMAChannelLite ? DMA_CHANNEL_LITE : DMA_CHANNEL_NORMAL, pInterruptSystem),
 	m_SCLK (11, GPIOModeAlternateFunction0),
 	m_MOSI (10, GPIOModeAlternateFunction0),
 	m_MISO ( 9, GPIOModeAlternateFunction0),
@@ -154,10 +155,12 @@ void CSPIMasterDMA::StartWriteRead (unsigned	nChipSelect,
 	m_TxDMA.Start ();
 }
 
-void CSPIMasterDMA::DMACompletionRoutine (boolean bStatus)
+void CSPIMasterDMA::DMACompletionRoutine (boolean bRxStatus)
 {
+	boolean bTxStatus = m_TxDMA.Wait ();
+
 	PeripheralEntry ();
-	write32 (ARM_SPI0_CS, read32 (ARM_SPI0_CS) & ~CS_TA);
+	write32 (ARM_SPI0_CS, read32 (ARM_SPI0_CS) & ~(CS_TA | CS_DMAEN | CS_ADCS));
 	PeripheralExit ();
 
 	TSPICompletionRoutine *pCompletionRoutine = m_pCompletionRoutine;
@@ -165,16 +168,84 @@ void CSPIMasterDMA::DMACompletionRoutine (boolean bStatus)
 
 	if (pCompletionRoutine != 0)
 	{
-		(*pCompletionRoutine) (bStatus && m_TxDMA.GetStatus (), m_pCompletionParam);
+		(*pCompletionRoutine) (bRxStatus && bTxStatus, m_pCompletionParam);
 	}
 }
 
 void CSPIMasterDMA::DMACompletionStub (unsigned nChannel, boolean bStatus, void *pParam)
 {
-	assert (nChannel == DMA_CHANNEL_SPI_RX);
-
 	CSPIMasterDMA *pThis = (CSPIMasterDMA *) pParam;
 	assert (pThis != 0);
 
 	pThis->DMACompletionRoutine (bStatus);
+}
+
+int CSPIMasterDMA::WriteReadSync (unsigned    nChipSelect,
+				  const void *pWriteBuffer,
+				  void	     *pReadBuffer,
+				  unsigned    nCount)
+{
+	assert (pWriteBuffer != 0 || pReadBuffer != 0);
+	const u8 *pWritePtr = (const u8 *) pWriteBuffer;
+	u8 *pReadPtr = (u8 *) pReadBuffer;
+
+	PeripheralEntry ();
+
+	// SCLK stays low for one clock cycle after each byte without this
+	assert (nCount <= 0xFFFF);
+	write32 (ARM_SPI0_DLEN, nCount);
+
+	assert (nChipSelect <= 1);
+	write32 (ARM_SPI0_CS,   (read32 (ARM_SPI0_CS) & ~CS_CS)
+			      | (nChipSelect << CS_CS__SHIFT)
+			      | CS_CLEAR_RX | CS_CLEAR_TX
+			      | CS_TA);
+
+	unsigned nWriteCount = 0;
+	unsigned nReadCount = 0;
+
+	assert (nCount > 0);
+	while (   nWriteCount < nCount
+	       || nReadCount  < nCount)
+	{
+		while (   nWriteCount < nCount
+		       && (read32 (ARM_SPI0_CS) & CS_TXD))
+		{
+			u32 nData = 0;
+			if (pWritePtr != 0)
+			{
+				nData = *pWritePtr++;
+			}
+
+			write32 (ARM_SPI0_FIFO, nData);
+
+			nWriteCount++;
+		}
+
+		while (   nReadCount < nCount
+		       && (read32 (ARM_SPI0_CS) & CS_RXD))
+		{
+			u32 nData = read32 (ARM_SPI0_FIFO);
+			if (pReadPtr != 0)
+			{
+				*pReadPtr++ = (u8) nData;
+			}
+
+			nReadCount++;
+		}
+	}
+
+	while (!(read32 (ARM_SPI0_CS) & CS_DONE))
+	{
+		while (read32 (ARM_SPI0_CS) & CS_RXD)
+		{
+			read32 (ARM_SPI0_FIFO);
+		}
+	}
+
+	write32 (ARM_SPI0_CS, read32 (ARM_SPI0_CS) & ~CS_TA);
+
+	PeripheralExit ();
+
+	return (int) nCount;
 }

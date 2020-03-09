@@ -2,7 +2,7 @@
 // mousebehaviour.cpp
 //
 // Circle - A C++ bare metal environment for Raspberry Pi
-// Copyright (C) 2016  R. Stange <rsta2@o2online.de>
+// Copyright (C) 2016-2018  R. Stange <rsta2@o2online.de>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -59,6 +59,7 @@ CMouseBehaviour::CMouseBehaviour (void)
 	m_nScreenHeight (0),
 	m_nPosX (0),
 	m_nPosY (0),
+	m_bHasMoved (FALSE),
 	m_bCursorOn (FALSE),
 	m_nButtons (0),
 	m_pEventHandler (0)
@@ -88,7 +89,7 @@ boolean CMouseBehaviour::Setup (unsigned nScreenWidth, unsigned nScreenHeight)
 	TagSetCursorInfo.nWidth = CURSOR_WIDTH;
 	TagSetCursorInfo.nHeight = CURSOR_HEIGHT;
 	TagSetCursorInfo.nUnused = 0;
-	TagSetCursorInfo.nPixelPointer = GPU_MEM_BASE + (u32) CursorSymbol;
+	TagSetCursorInfo.nPixelPointer = BUS_ADDRESS ((uintptr) CursorSymbol);
 	TagSetCursorInfo.nHotspotX = CURSOR_HOTSPOT_X;
 	TagSetCursorInfo.nHotspotY = CURSOR_HOTSPOT_Y;
 	if (!Tags.GetTag (PROPTAG_SET_CURSOR_INFO, &TagSetCursorInfo, sizeof TagSetCursorInfo, 6*4))
@@ -144,6 +145,17 @@ boolean CMouseBehaviour::ShowCursor (boolean bShow)
 	return bResult;
 }
 
+void CMouseBehaviour::UpdateCursor (void)
+{
+	if (   m_bCursorOn
+	    && m_bHasMoved)
+	{
+		m_bHasMoved = FALSE;
+
+		SetCursorState (m_nPosX, m_nPosY, TRUE);
+	}
+}
+
 void CMouseBehaviour::MouseStatusChanged (unsigned nButtons, int nDisplacementX, int nDisplacementY)
 {
 	if (   m_nScreenWidth == 0		// not setup?
@@ -173,10 +185,7 @@ void CMouseBehaviour::MouseStatusChanged (unsigned nButtons, int nDisplacementX,
 	if (   m_nPosX != nPrevX
 	    || m_nPosY != nPrevY)
 	{
-		if (m_bCursorOn)
-		{
-			SetCursorState (m_nPosX, m_nPosY, TRUE);
-		}
+		m_bHasMoved = TRUE;
 
 		if (m_pEventHandler != 0)
 		{

@@ -2,7 +2,7 @@
 // synchronize.cpp
 //
 // Circle - A C++ bare metal environment for Raspberry Pi
-// Copyright (C) 2014-2017  R. Stange <rsta2@o2online.de>
+// Copyright (C) 2014-2018  R. Stange <rsta2@o2online.de>
 // 
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -24,6 +24,24 @@
 
 #define MAX_CRITICAL_LEVEL	20		// maximum nested level of EnterCritical()
 
+unsigned CurrentExecutionLevel (void)
+{
+	u32 nCPSR;
+	asm volatile ("mrs %0, cpsr" : "=r" (nCPSR));
+
+	if (nCPSR & 0x40)
+	{
+		return FIQ_LEVEL;
+	}
+
+	if (nCPSR & 0x80)
+	{
+		return IRQ_LEVEL;
+	}
+
+	return TASK_LEVEL;
+}
+
 #ifdef ARM_ALLOW_MULTI_CORE
 
 static volatile unsigned s_nCriticalLevel[CORES] = {0};
@@ -43,14 +61,15 @@ void EnterCritical (unsigned nTargetLevel)
 	// if we are already on FIQ_LEVEL, we must not go back to IRQ_LEVEL here
 	assert (nTargetLevel == FIQ_LEVEL || !(nCPSR & 0x40));
 
-	DisableIRQs ();
-	if (nTargetLevel == FIQ_LEVEL)
-	{
-		DisableFIQs ();
-	}
+	asm volatile ("cpsid if");	// disable both IRQ and FIQ
 
 	assert (s_nCriticalLevel[nCore] < MAX_CRITICAL_LEVEL);
 	s_nCPSR[nCore][s_nCriticalLevel[nCore]++] = nCPSR;
+
+	if (nTargetLevel == IRQ_LEVEL)
+	{
+		EnableFIQs ();
+	}
 
 	DataMemBarrier ();
 }
@@ -62,6 +81,8 @@ void LeaveCritical (void)
 	unsigned nCore = nMPIDR & (CORES-1);
 
 	DataMemBarrier ();
+
+	DisableFIQs ();
 
 	assert (s_nCriticalLevel[nCore] > 0);
 	u32 nCPSR = s_nCPSR[nCore][--s_nCriticalLevel[nCore]];
@@ -84,14 +105,15 @@ void EnterCritical (unsigned nTargetLevel)
 	// if we are already on FIQ_LEVEL, we must not go back to IRQ_LEVEL here
 	assert (nTargetLevel == FIQ_LEVEL || !(nCPSR & 0x40));
 
-	DisableIRQs ();
-	if (nTargetLevel == FIQ_LEVEL)
-	{
-		DisableFIQs ();
-	}
+	asm volatile ("cpsid if");	// disable both IRQ and FIQ
 
 	assert (s_nCriticalLevel < MAX_CRITICAL_LEVEL);
 	s_nCPSR[s_nCriticalLevel++] = nCPSR;
+
+	if (nTargetLevel == IRQ_LEVEL)
+	{
+		EnableFIQs ();
+	}
 
 	DataMemBarrier ();
 }
@@ -99,6 +121,8 @@ void EnterCritical (unsigned nTargetLevel)
 void LeaveCritical (void)
 {
 	DataMemBarrier ();
+
+	DisableFIQs ();
 
 	assert (s_nCriticalLevel > 0);
 	u32 nCPSR = s_nCPSR[--s_nCriticalLevel];

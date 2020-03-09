@@ -2,7 +2,7 @@
 # Rules.mk
 #
 # Circle - A C++ bare metal environment for Raspberry Pi
-# Copyright (C) 2014-2017  R. Stange <rsta2@o2online.de>
+# Copyright (C) 2014-2020  R. Stange <rsta2@o2online.de>
 # 
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -18,14 +18,27 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #
 
-ifeq ($(strip $(CIRCLEHOME)),)
-CIRCLEHOME = ..
-endif
+CIRCLEHOME ?= ..
 
 -include $(CIRCLEHOME)/Config.mk
+-include $(CIRCLEHOME)/Config2.mk	# is not overwritten by "configure"
 
-RASPPI	?= 1
-PREFIX	?= arm-none-eabi-
+AARCH	 ?= 32
+RASPPI	 ?= 1
+PREFIX	 ?= arm-none-eabi-
+PREFIX64 ?= aarch64-none-elf-
+
+# see: doc/stdlib-support.txt
+STDLIB_SUPPORT ?= 1
+
+# set this to 0 to globally disable dependency checking
+CHECK_DEPS ?= 1
+
+# set this to "softfp" if you want to link specific libraries
+FLOAT_ABI ?= hard
+
+# set this to 1 to enable garbage collection on sections, may cause side effects
+GC_SECTIONS ?= 0
 
 CC	= $(PREFIX)gcc
 CPP	= $(PREFIX)g++
@@ -33,40 +46,156 @@ AS	= $(CC)
 LD	= $(PREFIX)ld
 AR	= $(PREFIX)ar
 
+ifeq ($(strip $(AARCH)),32)
 ifeq ($(strip $(RASPPI)),1)
-ARCH	?= -march=armv6k -mtune=arm1176jzf-s -mfloat-abi=hard
+ARCH	?= -DAARCH=32 -mcpu=arm1176jzf-s -marm -mfpu=vfp -mfloat-abi=$(FLOAT_ABI)
 TARGET	?= kernel
 else ifeq ($(strip $(RASPPI)),2)
-ARCH	?= -march=armv7-a -mfpu=neon-vfpv4 -mfloat-abi=hard
+ARCH	?= -DAARCH=32 -mcpu=cortex-a7 -marm -mfpu=neon-vfpv4 -mfloat-abi=$(FLOAT_ABI)
 TARGET	?= kernel7
-else
-ARCH	?= -march=armv8-a -mtune=cortex-a53 -mfpu=neon-fp-armv8 -mfloat-abi=hard
+else ifeq ($(strip $(RASPPI)),3)
+ARCH	?= -DAARCH=32 -mcpu=cortex-a53 -marm -mfpu=neon-fp-armv8 -mfloat-abi=$(FLOAT_ABI)
 TARGET	?= kernel8-32
+else ifeq ($(strip $(RASPPI)),4)
+ARCH	?= -DAARCH=32 -mcpu=cortex-a72 -marm -mfpu=neon-fp-armv8 -mfloat-abi=$(FLOAT_ABI)
+TARGET	?= kernel7l
+else
+$(error RASPPI must be set to 1, 2, 3 or 4)
+endif
+LOADADDR = 0x8000
+else ifeq ($(strip $(AARCH)),64)
+ifeq ($(strip $(RASPPI)),3)
+ARCH	?= -DAARCH=64 -mcpu=cortex-a53 -mlittle-endian -mcmodel=small
+TARGET	?= kernel8
+else ifeq ($(strip $(RASPPI)),4)
+ARCH	?= -DAARCH=64 -mcpu=cortex-a72 -mlittle-endian -mcmodel=small
+TARGET	?= kernel8-rpi4
+else
+$(error RASPPI must be set to 3 or 4)
+endif
+PREFIX	= $(PREFIX64)
+LOADADDR = 0x80000
+else
+$(error AARCH must be set to 32 or 64)
+endif
+
+ifneq ($(strip $(STDLIB_SUPPORT)),0)
+MAKE_VERSION_MAJOR := $(firstword $(subst ., ,$(MAKE_VERSION)))
+ifneq ($(filter 0 1 2 3,$(MAKE_VERSION_MAJOR)),)
+$(error STDLIB_SUPPORT > 0 requires GNU make 4.0 or newer)
+endif
+endif
+
+ifeq ($(strip $(STDLIB_SUPPORT)),3)
+LIBSTDCPP != $(CPP) $(ARCH) -print-file-name=libstdc++.a
+EXTRALIBS += $(LIBSTDCPP)
+LIBGCC_EH != $(CPP) $(ARCH) -print-file-name=libgcc_eh.a
+ifneq ($(strip $(LIBGCC_EH)),libgcc_eh.a)
+EXTRALIBS += $(LIBGCC_EH)
+endif
+ifeq ($(strip $(AARCH)),64)
+CRTBEGIN != $(CPP) $(ARCH) -print-file-name=crtbegin.o
+CRTEND   != $(CPP) $(ARCH) -print-file-name=crtend.o
+endif
+else
+CPPFLAGS  += -fno-exceptions -fno-rtti -nostdinc++
+endif
+
+ifeq ($(strip $(STDLIB_SUPPORT)),0)
+CFLAGS	  += -nostdinc
+else
+LIBGCC	  != $(CPP) $(ARCH) -print-file-name=libgcc.a
+EXTRALIBS += $(LIBGCC)
+endif
+
+ifeq ($(strip $(STDLIB_SUPPORT)),1)
+LIBM	  != $(CPP) $(ARCH) -print-file-name=libm.a
+ifneq ($(strip $(LIBM)),libm.a)
+EXTRALIBS += $(LIBM)
+endif
+endif
+
+ifeq ($(strip $(GC_SECTIONS)),1)
+CFLAGS	+= -ffunction-sections -fdata-sections
+LDFLAGS	+= --gc-sections
 endif
 
 OPTIMIZE ?= -O2
 
-INCLUDE	+= -I $(CIRCLEHOME)/include -I $(CIRCLEHOME)/addon -I $(CIRCLEHOME)/app/lib
+INCLUDE	+= -I $(CIRCLEHOME)/include -I $(CIRCLEHOME)/addon -I $(CIRCLEHOME)/app/lib \
+	   -I $(CIRCLEHOME)/addon/vc4 -I $(CIRCLEHOME)/addon/vc4/interface/khronos/include
+DEFINE	+= -D__circle__ -DRASPPI=$(RASPPI) -DSTDLIB_SUPPORT=$(STDLIB_SUPPORT) \
+	   -D__VCCOREVER__=0x04000000 -U__unix__ -U__linux__ #-DNDEBUG
 
-AFLAGS	+= $(ARCH) -DRASPPI=$(RASPPI) $(INCLUDE)
-CFLAGS	+= $(ARCH) -Wall -fsigned-char -fno-builtin -nostdinc -nostdlib \
-	   -D__circle__ -DRASPPI=$(RASPPI) $(INCLUDE) $(OPTIMIZE) -g #-DNDEBUG
-CPPFLAGS+= $(CFLAGS) -fno-exceptions -fno-rtti -std=c++14
+AFLAGS	+= $(ARCH) $(DEFINE) $(INCLUDE) $(OPTIMIZE)
+CFLAGS	+= $(ARCH) -Wall -fsigned-char -ffreestanding $(DEFINE) $(INCLUDE) $(OPTIMIZE) -g
+CPPFLAGS+= $(CFLAGS) -std=c++14
+LDFLAGS	+= --section-start=.init=$(LOADADDR)
+
+ifeq ($(strip $(CHECK_DEPS)),1)
+DEPS	= $(OBJS:.o=.d)
+endif
 
 %.o: %.S
-	$(AS) $(AFLAGS) -c -o $@ $<
+	@echo "  AS    $@"
+	@$(AS) $(AFLAGS) -c -o $@ $<
 
 %.o: %.c
-	$(CC) $(CFLAGS) -c -o $@ $<
+	@echo "  CC    $@"
+	@$(CC) $(CFLAGS) -std=gnu99 -c -o $@ $<
 
 %.o: %.cpp
-	$(CPP) $(CPPFLAGS) -c -o $@ $<
+	@echo "  CPP   $@"
+	@$(CPP) $(CPPFLAGS) -c -o $@ $<
 
-$(TARGET).img: $(OBJS) $(LIBS) $(CIRCLEHOME)/lib/startup.o $(CIRCLEHOME)/circle.ld
-	$(LD) -o $(TARGET).elf -Map $(TARGET).map -T $(CIRCLEHOME)/circle.ld $(CIRCLEHOME)/lib/startup.o $(OBJS) $(LIBS)
-	$(PREFIX)objdump -d $(TARGET).elf | $(PREFIX)c++filt > $(TARGET).lst
-	$(PREFIX)objcopy $(TARGET).elf -O binary $(TARGET).img
-	wc -c $(TARGET).img
+%.d: %.S
+	@$(AS) $(AFLAGS) -M -MG -MT $*.o -MT $@ -MF $@ $<
+
+%.d: %.c
+	@$(CC) $(CFLAGS) -M -MG -MT $*.o -MT $@ -MF $@ $<
+
+%.d: %.cpp
+	@$(CPP) $(CPPFLAGS) -M -MG -MT $*.o -MT $@ -MF $@ $<
+
+$(TARGET).img: $(OBJS) $(LIBS) $(CIRCLEHOME)/circle.ld
+	@echo "  LD    $(TARGET).elf"
+	@$(LD) -o $(TARGET).elf -Map $(TARGET).map $(LDFLAGS) \
+		-T $(CIRCLEHOME)/circle.ld $(CRTBEGIN) $(OBJS) \
+		--start-group $(LIBS) $(EXTRALIBS) --end-group $(CRTEND)
+	@echo "  DUMP  $(TARGET).lst"
+	@$(PREFIX)objdump -d $(TARGET).elf | $(PREFIX)c++filt > $(TARGET).lst
+	@echo "  COPY  $(TARGET).img"
+	@$(PREFIX)objcopy $(TARGET).elf -O binary $(TARGET).img
+	@echo -n "  WC    $(TARGET).img => "
+	@wc -c < $(TARGET).img
 
 clean:
-	rm -f *.o *.a *.elf *.lst *.img *.cir *.map *~ $(EXTRACLEAN)
+	rm -f *.d *.o *.a *.elf *.lst *.img *.hex *.cir *.map *~ $(EXTRACLEAN)
+
+ifneq ($(strip $(SDCARD)),)
+install: $(TARGET).img
+	cp $(TARGET).img $(SDCARD)
+	sync
+endif
+
+#
+# Eclipse support
+#
+
+SERIALPORT  ?= /dev/ttyUSB0
+USERBAUD ?= 115200
+FLASHBAUD ?= 115200
+REBOOTMAGIC ?=
+
+$(TARGET).hex: $(TARGET).img
+	@echo "  COPY  $(TARGET).hex"
+	@$(PREFIX)objcopy $(TARGET).elf -O ihex $(TARGET).hex
+
+flash: $(TARGET).hex
+ifneq ($(strip $(REBOOTMAGIC)),)
+	python $(CIRCLEHOME)/tools/reboottool.py $(REBOOTMAGIC) $(SERIALPORT) $(USERBAUD)
+endif
+	python $(CIRCLEHOME)/tools/flasher.py $(TARGET).hex $(SERIALPORT) $(FLASHBAUD)
+
+monitor:
+	putty -serial $(SERIALPORT) -sercfg $(USERBAUD)

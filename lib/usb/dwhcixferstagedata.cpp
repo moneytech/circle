@@ -2,7 +2,7 @@
 // dwhcixferstagedata.cpp
 //
 // Circle - A C++ bare metal environment for Raspberry Pi
-// Copyright (C) 2014-2017  R. Stange <rsta2@o2online.de>
+// Copyright (C) 2014-2018  R. Stange <rsta2@o2online.de>
 // 
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -22,23 +22,28 @@
 #include <circle/usb/dwhciframeschednper.h>
 #include <circle/usb/dwhciframeschednsplit.h>
 #include <circle/usb/dwhci.h>
+#include <circle/usb/usbhostcontroller.h>
 #include <circle/logger.h>
+#include <circle/timer.h>
 #include <assert.h>
 
 CDWHCITransferStageData::CDWHCITransferStageData (unsigned	 nChannel,
 						  CUSBRequest	*pURB,
 						  boolean	 bIn,
-						  boolean	 bStatusStage)
+						  boolean	 bStatusStage,
+						  unsigned	 nTimeoutMs)
 :	m_nChannel (nChannel),
 	m_pURB (pURB),
 	m_bIn (bIn),
 	m_bStatusStage (bStatusStage),
+	m_nTimeoutHZ (USB_TIMEOUT_NONE),
 	m_bSplitComplete (FALSE),
 	m_nTotalBytesTransfered (0),
 	m_nState (0),
 	m_nSubState (0),
 	m_nTransactionStatus (0),
 	m_pTempBuffer (0),
+	m_nStartTicksHZ (0),
 	m_pFrameScheduler (0)
 {
 	assert (m_pURB != 0);
@@ -101,7 +106,7 @@ CDWHCITransferStageData::CDWHCITransferStageData (unsigned	 nChannel,
 	}
 
 	assert (m_pBufferPointer != 0);
-	assert (((u32) m_pBufferPointer & 3) == 0);
+	assert (((uintptr) m_pBufferPointer & 3) == 0);
 
 	if (m_bSplitTransaction)
 	{
@@ -125,6 +130,15 @@ CDWHCITransferStageData::CDWHCITransferStageData (unsigned	 nChannel,
 			assert (m_pFrameScheduler != 0);
 		}
 	}
+
+	if (nTimeoutMs != USB_TIMEOUT_NONE)
+	{
+		assert (m_pEndpoint->GetType () == EndpointTypeInterrupt);
+
+		m_nTimeoutHZ = MSEC2HZ (nTimeoutMs);
+		assert (m_nTimeoutHZ > 0);
+		m_nStartTicksHZ = CTimer::Get ()->GetTicks ();
+	}
 }
 
 CDWHCITransferStageData::~CDWHCITransferStageData (void)
@@ -140,6 +154,11 @@ CDWHCITransferStageData::~CDWHCITransferStageData (void)
 	m_pEndpoint = 0;
 	m_pDevice = 0;
 	m_pURB = 0;
+}
+
+void CDWHCITransferStageData::SetChannelNumber (unsigned nChannel)
+{
+	m_nChannel = nChannel;
 }
 
 void CDWHCITransferStageData::TransactionComplete (u32 nStatus, u32 nPacketsLeft, u32 nBytesLeft)
@@ -341,7 +360,7 @@ u32 CDWHCITransferStageData::GetDMAAddress (void) const
 {
 	assert (m_pBufferPointer != 0);
 
-	return (u32) m_pBufferPointer;
+	return (u32) (uintptr) m_pBufferPointer;
 }
 
 u32 CDWHCITransferStageData::GetBytesToTransfer (void) const
@@ -426,6 +445,16 @@ u32 CDWHCITransferStageData::GetResultLen (void) const
 	return m_nTotalBytesTransfered;
 }
 
+boolean CDWHCITransferStageData::IsTimeout (void) const
+{
+	if (m_nTimeoutHZ == USB_TIMEOUT_NONE)
+	{
+		return FALSE;
+	}
+
+	return CTimer::Get ()->GetTicks ()-m_nStartTicksHZ >= m_nTimeoutHZ ? TRUE : FALSE;
+}
+
 CUSBRequest *CDWHCITransferStageData::GetURB (void) const
 {
 	assert (m_pURB != 0);
@@ -436,3 +465,5 @@ CDWHCIFrameScheduler *CDWHCITransferStageData::GetFrameScheduler (void) const
 {
 	return m_pFrameScheduler;
 }
+
+IMPLEMENT_CLASS_ALLOCATOR (CDWHCITransferStageData)

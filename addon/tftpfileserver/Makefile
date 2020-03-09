@@ -7,7 +7,10 @@ CIRCLEHOME = ../..
 OBJS	= tftpfileserver.o
 
 libtftpfileserver.a: $(OBJS)
-	rm -f $@
-	$(AR) cr $@ $(OBJS)
+	@echo "  AR    $@"
+	@rm -f $@
+	@$(AR) cr $@ $(OBJS)
 
 include $(CIRCLEHOME)/Rules.mk
+
+-include $(DEPS)

@@ -2,7 +2,7 @@
 // gpiomanager.h
 //
 // Circle - A C++ bare metal environment for Raspberry Pi
-// Copyright (C) 2014-2016  R. Stange <rsta2@o2online.de>
+// Copyright (C) 2014-2020  R. Stange <rsta2@o2online.de>
 // 
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -95,7 +95,7 @@ void CGPIOManager::InterruptHandler (void)
 
 	PeripheralEntry ();
 
-	unsigned nEventStatus = read32 (ARM_GPIO_GPEDS0);
+	u32 nEventStatus = read32 (ARM_GPIO_GPEDS0);
 
 	unsigned nPin = 0;
 	while (nPin < GPIO_PINS)
@@ -114,19 +114,23 @@ void CGPIOManager::InterruptHandler (void)
 
 	if (nPin < GPIO_PINS)
 	{
-		unsigned nMask = 1 << (nPin % 32);
-		
-		if (m_apPin[nPin] != 0)
+		CGPIOPin *pPin = m_apPin[nPin];
+		if (pPin != 0)
 		{
-			m_apPin[nPin]->InterruptHandler ();
+			pPin->InterruptHandler ();
+
+			if (pPin->m_bAutoAck)
+			{
+				write32 (ARM_GPIO_GPEDS0 + pPin->m_nRegOffset, pPin->m_nRegMask);
+			}
 		}
 		else
 		{
 			// disable all interrupt sources
 			CGPIOPin::DisableAllInterrupts (nPin);
-		}
 
-		write32 (ARM_GPIO_GPEDS0 + (nPin / 32) * 4, nMask);
+			write32 (ARM_GPIO_GPEDS0 + (nPin / 32) * 4, 1 << (nPin % 32));
+		}
 	}
 
 	PeripheralExit ();

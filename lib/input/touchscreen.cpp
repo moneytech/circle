@@ -16,6 +16,8 @@
 #include <circle/input/touchscreen.h>
 #include <circle/bcmpropertytags.h>
 #include <circle/devicenameservice.h>
+#include <circle/memory.h>
+#include <circle/bcm2835.h>
 #include <circle/logger.h>
 #include <circle/util.h>
 #include <assert.h>
@@ -37,6 +39,10 @@ struct TFT5406Buffer
 	Point[TOUCH_SCREEN_MAX_POINTS];
 };
 
+#define FTS_TOUCH_DOWN		0
+#define FTS_TOUCH_UP		1
+#define FTS_TOUCH_CONTACT	2
+
 static const char FromFT5406[] = "ft5406";
 
 CTouchScreenDevice::CTouchScreenDevice (void)
@@ -56,24 +62,31 @@ boolean CTouchScreenDevice::Initialize (void)
 {
 	assert (m_pFT5406Buffer == 0);
 
+	uintptr nTouchBuffer = CMemorySystem::GetCoherentPage (COHERENT_SLOT_TOUCHBUF);
+
 	CBcmPropertyTags Tags;
 	TPropertyTagSimple TagSimple;
-	if (!Tags.GetTag (PROPTAG_GET_TOUCHBUF, &TagSimple, sizeof TagSimple))
+	TagSimple.nValue = BUS_ADDRESS (nTouchBuffer);
+	if (!Tags.GetTag (PROPTAG_SET_TOUCHBUF, &TagSimple, sizeof TagSimple))
 	{
-		CLogger::Get ()->Write (FromFT5406, LogError, "Cannot get touch buffer");
+		if (!Tags.GetTag (PROPTAG_GET_TOUCHBUF, &TagSimple, sizeof TagSimple))
+		{
+			CLogger::Get ()->Write (FromFT5406, LogError, "Cannot get touch buffer");
 
-		return FALSE;
+			return FALSE;
+		}
+
+		if (TagSimple.nValue == 0)
+		{
+			CLogger::Get ()->Write (FromFT5406, LogError, "Touchscreen not detected");
+
+			return FALSE;
+		}
+
+		nTouchBuffer = TagSimple.nValue & ~0xC0000000;
 	}
 
-	if (TagSimple.nValue == 0)
-	{
-		CLogger::Get ()->Write (FromFT5406, LogError, "Touchscreen not detected");
-
-		return FALSE;
-	}
-
-	TagSimple.nValue &= ~0xC0000000;
-	m_pFT5406Buffer = (TFT5406Buffer *) TagSimple.nValue;
+	m_pFT5406Buffer = (TFT5406Buffer *) nTouchBuffer;
 	assert (m_pFT5406Buffer != 0);
 	*(volatile u8 *) &m_pFT5406Buffer->NumPoints = 99;
 
@@ -106,31 +119,35 @@ void CTouchScreenDevice::Update (void)
 		unsigned y = (((unsigned) Regs.Point[i].yh & 0xF) << 8) | Regs.Point[i].yl;
 
 		unsigned nTouchID = (Regs.Point[i].yh >> 4) & 0xF;
+		unsigned nEventID = (Regs.Point[i].xh >> 6) & 0x3;
 		assert (nTouchID < TOUCH_SCREEN_MAX_POINTS);
 
 		nModifiedIDs |= 1 << nTouchID;
 
-		if (!((1 << nTouchID) & m_nKnownIDs))
+		if (nEventID == FTS_TOUCH_CONTACT || nEventID == FTS_TOUCH_DOWN)
 		{
-			m_nPosX[nTouchID] = x;
-			m_nPosY[nTouchID] = y;
-
-			if (m_pEventHandler != 0)
-			{
-				(*m_pEventHandler) (TouchScreenEventFingerDown, nTouchID, x, y);
-			}
-		}
-		else
-		{
-			if (   x != m_nPosX[nTouchID]
-			    || y != m_nPosY[nTouchID])
+			if (!((1 << nTouchID) & m_nKnownIDs))
 			{
 				m_nPosX[nTouchID] = x;
 				m_nPosY[nTouchID] = y;
 
 				if (m_pEventHandler != 0)
 				{
-					(*m_pEventHandler) (TouchScreenEventFingerMove, nTouchID, x, y);
+					(*m_pEventHandler) (TouchScreenEventFingerDown, nTouchID, x, y);
+				}
+			}
+			else
+			{
+				if (   x != m_nPosX[nTouchID]
+				    || y != m_nPosY[nTouchID])
+				{
+					m_nPosX[nTouchID] = x;
+					m_nPosY[nTouchID] = y;
+
+					if (m_pEventHandler != 0)
+					{
+						(*m_pEventHandler) (TouchScreenEventFingerMove, nTouchID, x, y);
+					}
 				}
 			}
 		}
